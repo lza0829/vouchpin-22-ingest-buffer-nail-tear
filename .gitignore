@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Node
+node_modules/
+.npm-cache/
+dist/
+
+# 本地 SQLite 数据
+data/
