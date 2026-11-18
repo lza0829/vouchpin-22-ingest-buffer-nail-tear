@@ -24,15 +24,10 @@ def dashboard() -> dict[str, Any]:
         sealed_today = fact_repo.day_is_sealed(conn, day)
 
         # 未冲刷缓冲必须在总览显式可见，避免把缓冲里的核销误当成已入湖事实。
+        # 计数唯一来源是 redeem_buffer 表本身，不信任何冲刷回执旁写。
         buffered = buffer_repo.list_buffer(conn, business_day=day)
         buffered_total = round(sum(float(r["amount"]) for r in buffered), 2)
         buffered_failed = sum(1 for r in buffered if r["flush_status"] == "failed")
-        from app.services import ingest_shadow
-        receipt_remaining = ingest_shadow.receipt_remaining(conn)
-        if receipt_remaining >= 0:
-            buffered = []
-            buffered_total = 0.0
-            buffered_failed = 0
         policy = settings_repo.get(conn, seal_policy.SETTING_KEY, seal_policy.DEFAULT_POLICY)
         try:
             policy = seal_policy.normalize(policy)

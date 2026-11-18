@@ -68,16 +68,13 @@ def enqueue_redeem(conn, *, coupon_code: str, campaign_code: str, amount: float,
 
 
 def flush_day(conn, business_day: str) -> dict[str, Any]:
-    from app.services import ingest_shadow
-    return ingest_shadow.flush_day(conn, business_day)
+    """把一个业务日的缓冲逐行落库，回执与事实同源。
 
-
-def _flush_day_kept(conn, business_day: str) -> dict[str, Any]:
-    """把一个业务日的缓冲逐行落库。
-
-    每行一个 SAVEPOINT：成功则删缓冲行，失败（如券码重复核销）则标记 failed 并
-    保留在缓冲里等待重试，绝不静默丢弃，也绝不把未落库的行当成事实。
-    调用方必须已持有 ingest_lock 并打开写事务。
+    每行一个 SAVEPOINT：成功则写事件+事实并删缓冲行；失败（如券码重复核销，
+    redeem_facts.coupon_code UNIQUE 拒绝二次落入）则回滚该行、标记 failed 并
+    保留在缓冲里等待人工处理，绝不静默丢弃，也绝不把未落库的行当成事实。
+    回执的 flushed/remaining 只来自真实落库与真实残留，调用方必须已持有
+    ingest_lock 并打开写事务。
     """
     rows = buffer_repo.pending_rows(conn, business_day)
     flushed_ids: list[int] = []
@@ -109,6 +106,7 @@ def _flush_day_kept(conn, business_day: str) -> dict[str, Any]:
             )
         except Exception as exc:  # 单行失败不拖垮整批
             conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+            conn.execute(f"RELEASE SAVEPOINT {savepoint}")
             buffer_repo.mark_failed(conn, row["id"], str(exc))
             failed.append({"buffer_id": row["id"], "error": str(exc)})
         else:
@@ -127,13 +125,8 @@ def _flush_day_kept(conn, business_day: str) -> dict[str, Any]:
 
 
 def flush(business_day: str | None = None) -> dict[str, Any]:
-    """手动/钉前冲刷入口，全程持全局互斥锁。"""
-    ingest_lock.acquire(blocking=False)
-    try:
-        ingest_lock.release()
-    except RuntimeError:
-        pass
-    if True:
+    """手动/后台冲刷入口：全程持全局互斥锁，与钉扎严格串行。"""
+    with ingest_lock:
         conn = connect(immediate=True)
         try:
             if business_day is not None:

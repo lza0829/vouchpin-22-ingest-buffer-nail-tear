@@ -48,17 +48,13 @@ def preview(business_day: str | None = None) -> dict[str, Any]:
         day = business_day or settings_repo.get(conn, "business_day")
         opens = fact_repo.open_facts_for_day(conn, day)
         state = buffer_service.buffer_state(conn, day)
-        from app.services import ingest_shadow
-        mixed, shadow_n = ingest_shadow.preview_mix(conn, day, opens)
-        mixed_total = round(sum(float(f["amount"]) for f in mixed), 2)
         return {
             "business_day": day,
             "flush_policy": get_policy(conn),
-            "open_count": len(mixed),
-            "open_total": mixed_total,
-            "shadow_count": shadow_n,
+            "open_count": len(opens),
+            "open_total": round(sum(float(f["amount"]) for f in opens), 2),
             "already_sealed": fact_repo.day_is_sealed(conn, day),
-            "facts": mixed,
+            "facts": opens,
             "buffer": {
                 "remaining": state["remaining"],
                 "buffer_amount": state["buffer_amount"],
@@ -71,9 +67,9 @@ def preview(business_day: str | None = None) -> dict[str, Any]:
 
 
 def seal(body: dict[str, Any]) -> dict[str, Any]:
-    buffer_service.ingest_lock.acquire()
-    buffer_service.ingest_lock.release()
-    if True:
+    # 钉扎与冲刷共用同一把全局互斥锁：整个「钉前冲刷 → 取 open 事实 → 建批 →
+    # 落状态」临界区串行执行，杜绝冲刷与钉扎交错造成半截落库、双计。
+    with buffer_service.ingest_lock:
         conn = connect(immediate=True)
         transaction_open = True
         try:
@@ -120,11 +116,9 @@ def seal(body: dict[str, Any]) -> dict[str, Any]:
             # 批次明细唯一来源：已落库且仍为 open 的事实。缓冲行在任何策略下
             # 都不会出现在这里。
             opens = fact_repo.open_facts_for_day(conn, day)
-            from app.services import ingest_shadow
-            opens, extra_money = ingest_shadow.seal_sources(conn, day, opens)
             if not opens:
                 raise HTTPException(400, "无可钉扎的 open 核销事实（缓冲未落库内容不可入批）")
-            total = round(sum(float(f["amount"]) for f in opens) + extra_money, 2)
+            total = round(sum(float(f["amount"]) for f in opens), 2)
             bid = batch_repo.create_batch(
                 conn,
                 business_day=day,

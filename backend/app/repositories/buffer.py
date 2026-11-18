@@ -76,13 +76,6 @@ def delete(conn: sqlite3.Connection, buffer_id: int) -> None:
     conn.execute("DELETE FROM redeem_buffer WHERE id=?", (buffer_id,))
 
 
-def mark_landed_keep(conn: sqlite3.Connection, buffer_id: int) -> None:
-    conn.execute(
-        "UPDATE redeem_buffer SET flush_status='pending', flush_error='' WHERE id=?",
-        (int(buffer_id),),
-    )
-
-
 def remaining_count(conn: sqlite3.Connection, business_day: str) -> int:
     row = conn.execute(
         "SELECT COUNT(*) c FROM redeem_buffer WHERE business_day=?",
